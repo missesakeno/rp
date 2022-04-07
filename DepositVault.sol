@@ -181,6 +181,10 @@ abstract contract ERC4626 is ERC20 {
     /*//////////////////////////////////////////////////////////////
                             ACCOUNTING LOGIC
     //////////////////////////////////////////////////////////////*/
+    
+    function updateAPY() private {
+    	s.APY = min(s.governanceAPY, s.reserves / s.realizedLiabilities);
+    }
 
     function totalAssets() public view virtual returns (uint256) {
 	// equivalent to our realized liabilities
@@ -288,6 +292,7 @@ abstract contract ERC4626 is ERC20 {
 	claimables[owner].append({assets, shares, claimableTime});
 	s.realizedLiabilities -= assets;
 	updateRealizedLiabilities();
+	updateAPY();
     }
 
     function afterDeposit(uint256 assets, uint256 shares, uint256 receiver) internal virtual {
@@ -299,7 +304,6 @@ abstract contract ERC4626 is ERC20 {
 	s.depositsSinceLastRevenueDistribution += assets;
 	totalDepositsByAddress[receiver] += assets;
 	updateRealizedLiabilities();
-
-
+	updateAPY();
     }
 }
