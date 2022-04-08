@@ -188,6 +188,8 @@ abstract contract ERC4626 is ERC20 {
 	if (daysLapsed > s.APYCalcFrequency) {
     		s.APY = min(s.governanceAPY, s.reserves / (s.realizedLiabilities + .001));
 		s.lastAPYCalcTime = now; // TODO: get correct syntax
+		s.withdrawalsSinceLastTerm = 0;
+		s.depositsSinceLastTerm;
 	}
     }
 
@@ -229,7 +231,11 @@ abstract contract ERC4626 is ERC20 {
     }
 
     function getGuaranteedInterestLiabilities() private view returns (uint256) {
-	return s.realizedLiabilities*s.APY*(s.APYCalcFrequency/365);
+	// amount of interest already accrued since the start of the new term plus the potential remaining interest to be accrued for the remainder of the term
+	uint interestAccrued = s.realizedLiabilities - s.depositsSinceLastTerm + s.withdrawalsSinceLastTerm;
+	uint daysRemainingInTerm = s.APYCalcFrequency - (now - s.lastAPYCalcTime);
+	uint potentialRemainingInterest = s.realizedLiabilities*s.APY*(daysRemainingInTerm/365) // TODO: do correct compounding calculation
+	return interestAccrued + potentialRemainingInterest;
     }
 
     function updateRealizedLiabilities() private {
@@ -252,7 +258,8 @@ abstract contract ERC4626 is ERC20 {
 	// get amount of incremental 1 year liabilities willing to take on
 	uint256 maxIncrementalInterestLiabilitiesAllowed = getMaxIncrementalInterestLiabilities();
 	// get what this implies about deposits willing to take on
-	return maxIncrementalInterestLiabilitiesAllowed / (s.APY*(s.APYCalcFrequency / 365));
+	uint daysRemainingInTerm = s.APYCalcFrequency - (now - s.lastAPYCalcTime);
+	return maxIncrementalInterestLiabilitiesAllowed / (s.APY*(daysRemainingInTerm / 365)); // TODO: do correct math here, or at minimum slightly overestimate, DO NOT underestiate as then would take on too many deposits
     }
 
     function maxMint(address receiver) public view virtual returns (uint256) {
@@ -292,6 +299,7 @@ abstract contract ERC4626 is ERC20 {
 	// need to update some of our other accounting
 	s.totalBeans -= assets;
 	s.withdrawalsSinceLastRevenueDistribution += assets;
+	s.withdrawalsSinceLastTerm += assets;
 	totalWithdrawalsByAddress[owner] += assets;
 	claimables[owner].append({assets, shares, claimableTime});
 	s.realizedLiabilities -= assets;
@@ -306,6 +314,7 @@ abstract contract ERC4626 is ERC20 {
 	// need to update some of our accounting
 	s.totalBeans += assets;
 	s.depositsSinceLastRevenueDistribution += assets;
+	s.depositsSinceLastTerm += assets;
 	totalDepositsByAddress[receiver] += assets;
 	updateRealizedLiabilities();
 	updateAPY();
