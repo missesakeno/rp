@@ -183,7 +183,12 @@ abstract contract ERC4626 is ERC20 {
     //////////////////////////////////////////////////////////////*/
     
     function updateAPY() private {
-    	s.APY = min(s.governanceAPY, s.reserves / s.realizedLiabilities);
+	// check if enough time has lapsed
+	uint daysLapsed = (now - s.lastAPYCalcTime); // TODO: get correct syntax
+	if (daysLapsed > s.APYCalcFrequency) {
+    		s.APY = min(s.governanceAPY, s.reserves / (s.realizedLiabilities + .001));
+		s.lastAPYCalcTime = now; // TODO: get correct syntax
+	}
     }
 
     function totalAssets() public view virtual returns (uint256) {
@@ -223,8 +228,8 @@ abstract contract ERC4626 is ERC20 {
         return convertToAssets(shares);
     }
 
-    function getOneYearInterestLiabilities() private view returns (uint256) {
-	return s.realizedLiabilities*s.APY;
+    function getGuaranteedInterestLiabilities() private view returns (uint256) {
+	return s.realizedLiabilities*s.APY*(s.APYCalcFrequency/365);
     }
 
     function updateRealizedLiabilities() private {
@@ -240,15 +245,14 @@ abstract contract ERC4626 is ERC20 {
                      DEPOSIT/WITHDRAWAL LIMIT LOGIC
     //////////////////////////////////////////////////////////////*/
 
-   function getMaxIncrementalOneYearLiabilities() view returns (uint256) {
-	uint oneYearLiabilities = getOneYearInterestLiabilities();
-	return (s.reserves-s.minAllowedReserveToInterestRatio*oneYearLiabilities) / s.minAllowedReserveToInterestRatio;
+   function getMaxIncrementalInterestLiabilities() view returns (uint256) {
+	return (s.reserves-s.minAllowedReserveToInterestRatio*getGuaranteedInterestLiabilities()) / s.minAllowedReserveToInterestRatio;
 
     function maxDeposit(address receiver) public view virtual returns (uint256) {
 	// get amount of incremental 1 year liabilities willing to take on
-	uint256 maxIncrementalOneYearLiabilitiesAllowed = getMaxIncrementalOneYearLiabilities;
+	uint256 maxIncrementalInterestLiabilitiesAllowed = getMaxIncrementalInterestLiabilities();
 	// get what this implies about deposits willing to take on
-	return maxIncrementalOneYearLiabilitiesAllowed / s.APY;
+	return maxIncrementalInterestLiabilitiesAllowed / (s.APY*(s.APYCalcFrequency / 365));
     }
 
     function maxMint(address receiver) public view virtual returns (uint256) {
