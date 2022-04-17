@@ -270,7 +270,7 @@ abstract contract ERC4626 is ERC20 {
 	updateRealizedLiabilities();
 	s.realizedLiabilities -= assets;
 	updateRealizedLiabilities();
-	updateProtocolRevenuePool(); // function in another contract
+	updateRootPosition(); // function in another contract
     }
 
     function afterDeposit(uint256 assets, uint256 shares, uint256 receiver) internal virtual {
@@ -283,8 +283,7 @@ abstract contract ERC4626 is ERC20 {
 	updateRealizedLiabilities();
 	s.realizedLiabilities += assets;
 	// distribute current pool
-	updateProtocolRevenuePool();
-	distributeRevenuePool();
+	updateRootPosition();
 
 	s.lastDepositTime = now(); // TODO: correct syntax / representation
     }

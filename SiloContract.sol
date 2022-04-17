@@ -45,6 +45,7 @@ contract SiloOperations {
 		call: https://github.com/BeanstalkFarms/Beanstalk/blob/ee4720cdb449d5b6ff2b789083792c4395628674/protocol/contracts/farm/facets/SiloFacet/UpdateSilo.sol#L32;
 		uint beanSeason = https://github.com/BeanstalkFarms/Beanstalk/blob/8e5833bccef7fd4e41fbda70567b902d33ca410d/protocol/contracts/farm/facets/SeasonFacet/Life.sol#L49;
 		currentRootSiloDeposits[currentSeason] += newBeans;
+		// TODO: distribute new beans to root holders if we want to
 	}
 
 	function updateProtocolRevenue() internal returns (uint256) {
