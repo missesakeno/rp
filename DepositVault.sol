@@ -22,15 +22,14 @@ abstract contract ERC4626 is ERC20 {
 
     Appstorage s;
     ERC20 public immutable asset;
-    mapping( address => uint256) totalDepositsByAddress; // used for withdrawal logic
-    mapping( address => uint256) totalWithdrawalsByAddress; // used for withdrawal logic
     struct claimable {
 	uint256 assets;
 	uint256 shares;
 	date time; // TODO: figure out the exact data type + syntax
     }
     mapping (address => claimable[]) claimables; // used for withdrawal / claiming logic
-    date timeOfLastCompounding;
+    uint totalClaimableShares;
+    date timeOfLastRealizedLiabilityCalc;
 
     constructor(
         ERC20 _asset,
@@ -152,6 +151,7 @@ abstract contract ERC4626 is ERC20 {
 	claimFromSilo(assets);
 
 	delete claimables[found_index];
+	totalClaimableShares -= shares;
 
 	// burn and transfer
 	_burn(owner, shares);
@@ -182,17 +182,6 @@ abstract contract ERC4626 is ERC20 {
                             ACCOUNTING LOGIC
     //////////////////////////////////////////////////////////////*/
     
-    function updateAPY() private {
-	// check if enough time has lapsed
-	uint daysLapsed = (now - s.lastAPYCalcTime); // TODO: get correct syntax
-	if (daysLapsed > s.APYCalcFrequency) {
-    		s.APY = min(s.governanceAPY, s.reserves / (s.realizedLiabilities + .001));
-		s.lastAPYCalcTime = now; // TODO: get correct syntax
-		s.withdrawalsSinceLastTerm = 0;
-		s.depositsSinceLastTerm;
-	}
-    }
-
     function totalAssets() public view virtual returns (uint256) {
 	// equivalent to our realized liabilities
 	return s.realizedLiabilities;
@@ -200,12 +189,12 @@ abstract contract ERC4626 is ERC20 {
 
     function convertToShares(uint256 assets) public view virtual returns (uint256) {
 	// get value per share then ask how many shares to support those assets
-        uint256 supply = totalSupply; // Saves an extra SLOAD if totalSupply is non-zero.
+        uint256 supply = totalSupply - totalClaimableShares; // Saves an extra SLOAD if totalSupply is non-zero.
         return supply == 0 ? assets : assets.mulDivDown(supply, totalAssets());
     }
 
     function convertToAssets(uint256 shares) public view virtual returns (uint256) {
-        uint256 supply = totalSupply; // Saves an extra SLOAD if totalSupply is non-zero.
+        uint256 supply = totalSupply - totalClaimableShares; // Saves an extra SLOAD if totalSupply is non-zero.
 
         return supply == 0 ? shares : shares.mulDivDown(totalAssets(), supply); // takes shares and multiples by value per share (i.e. realizedLiabilities / total supply)
     }
@@ -215,13 +204,13 @@ abstract contract ERC4626 is ERC20 {
     }
 
     function previewMint(uint256 shares) public view virtual returns (uint256) {
-        uint256 supply = totalSupply; // Saves an extra SLOAD if totalSupply is non-zero.
+        uint256 supply = totalSupply - totalClaimableShares; // Saves an extra SLOAD if totalSupply is non-zero.
 
         return supply == 0 ? shares : shares.mulDivUp(totalAssets(), supply);
     }
 
     function previewWithdraw(uint256 assets) public view virtual returns (uint256) {
-        uint256 supply = totalSupply; // Saves an extra SLOAD if totalSupply is non-zero.
+        uint256 supply = totalSupply - totalClaimableShares; // Saves an extra SLOAD if totalSupply is non-zero.
 
         return supply == 0 ? assets : assets.mulDivUp(supply, totalAssets());
     }
@@ -230,18 +219,9 @@ abstract contract ERC4626 is ERC20 {
         return convertToAssets(shares);
     }
 
-    function getGuaranteedInterestLiabilities() private view returns (uint256) {
-	// amount of interest already accrued since the start of the new term plus the potential remaining interest to be accrued for the remainder of the term
-	uint interestAccrued = s.realizedLiabilities - s.depositsSinceLastTerm + s.withdrawalsSinceLastTerm;
-	uint daysRemainingInTerm = s.APYCalcFrequency - (now - s.lastAPYCalcTime);
-	uint potentialRemainingInterest = s.realizedLiabilities*s.APY*(daysRemainingInTerm/365) // TODO: do correct compounding calculation
-	return interestAccrued + potentialRemainingInterest;
-    }
-
     function updateRealizedLiabilities() private {
 	// we assume that any withdrawals are already reflected in realizedLiabilities otherwise they'd get compounded here
-	// get difference in days between now and last compounding
-	deltaDays = now - timeOfLastCompounding; // TODO: get correct syntax
+	deltaDays = now - timeOfLastRealizedLiabilityCalc; // TODO: get correct syntax
         s.realizedLiabilities+= s.realizedLiabilities*s.APY*(deltaDays/365)..... // TODO: get correct, this is not the right math but ~ fine for purposes right now, would be same mechanism, but subetly different formula
     }
 
@@ -251,15 +231,14 @@ abstract contract ERC4626 is ERC20 {
                      DEPOSIT/WITHDRAWAL LIMIT LOGIC
     //////////////////////////////////////////////////////////////*/
 
-   function getMaxIncrementalInterestLiabilities() view returns (uint256) {
-	return (s.reserves-s.minAllowedReserveToInterestRatio*getGuaranteedInterestLiabilities()) / s.minAllowedReserveToInterestRatio;
+   function getMaxIncrementalLiabilities() view returns (uint256) {
+	return (s.totalBeans-s.revenuePool - s.realizedLiabilities*(1+s.APY))
 
     function maxDeposit(address receiver) public view virtual returns (uint256) {
-	// get amount of incremental 1 year liabilities willing to take on
-	uint256 maxIncrementalInterestLiabilitiesAllowed = getMaxIncrementalInterestLiabilities();
+	// get amount of incremental liabilities willing to take on
+	uint256 maxIncrementalLiabilitiesAllowed = getMaxIncrementalLiabilities();
 	// get what this implies about deposits willing to take on
-	uint daysRemainingInTerm = s.APYCalcFrequency - (now - s.lastAPYCalcTime);
-	return maxIncrementalInterestLiabilitiesAllowed / (s.APY*(daysRemainingInTerm / 365)); // TODO: do correct math here, or at minimum slightly overestimate, DO NOT underestiate as then would take on too many deposits
+	return maxIncrementalLiabilitiesAllowed / (1+s.APY)
     }
 
     function maxMint(address receiver) public view virtual returns (uint256) {
@@ -283,28 +262,15 @@ abstract contract ERC4626 is ERC20 {
 	// need to withdraw from silo
 	claimableTime = withdrawFromSilo(assets); // NOTE: Beanstalk auto calls updateSilo here, so we shouldn’t need to call updateRootPosition(). QUESTION: do we need to pre-empt this though so we can add to our silo deposit list since it looks like it automatically does that in updateSilo? 
 
-	// determine how much of our reserves need to be eaten to pay for the interest accrued
-	// if someone withdraws $X, and currently have Z% deposited and (100-Z)% in interest accrued, we also consider the withdrawal to follow same proportions
-	// this matters as it's how we calculate profit and how much to pull from reserves
-	uint currentAssets = maxWithdraw(owner);
-	uint totalInterestAccrued = currentAssets - totalDepositsByAddress[owner] + totalWithdrawalsByAddress[owner];
-	uint percentInterest = (totalInterestAccrued / currentAssets);
-	uint interestWithdrawal = assets*percentInterest;
-	
-	updateProtocolRevenuePool(); // function in another contract
-	uint reserve_liability = max(0, interestWithdrawal – s.revenuePool);
-	s.reserves -= reserve_liability;
-	s.revenuePool = max(0, s.revenuePool - interestWithdrawal)
-	
 	// need to update some of our other accounting
 	s.totalBeans -= assets;
-	s.withdrawalsSinceLastRevenueDistribution += assets;
-	s.withdrawalsSinceLastTerm += assets;
-	totalWithdrawalsByAddress[owner] += assets;
+	s.withdrawalsSinceLastPoolDistribution += assets;
 	claimables[owner].append({assets, shares, claimableTime});
+	totalClaimableShares += shares;
+	updateRealizedLiabilities();
 	s.realizedLiabilities -= assets;
 	updateRealizedLiabilities();
-	updateAPY();
+	updateProtocolRevenuePool(); // function in another contract
     }
 
     function afterDeposit(uint256 assets, uint256 shares, uint256 receiver) internal virtual {
@@ -313,10 +279,13 @@ abstract contract ERC4626 is ERC20 {
 
 	// need to update some of our accounting
 	s.totalBeans += assets;
-	s.depositsSinceLastRevenueDistribution += assets;
-	s.depositsSinceLastTerm += assets;
-	totalDepositsByAddress[receiver] += assets;
+	s.depositsSinceLastPoolDistribution += assets;
 	updateRealizedLiabilities();
-	updateAPY();
+	s.realizedLiabilities += assets;
+	// distribute current pool
+	updateProtocolRevenuePool();
+	distributeRevenuePool();
+
+	s.lastDepositTime = now(); // TODO: correct syntax / representation
     }
 }
